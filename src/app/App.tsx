@@ -37,7 +37,9 @@ function useDebouncedSave(collection: string, data: any, ready: boolean, delay =
       return;
     }
 
-    clearTimeout(timer.current);
+     clearTimeout(timer.current);
+    const isEmptyArray = Array.isArray(data) && data.length === 0;
+    const saveDelay = isEmptyArray ? 0 : delay;
     timer.current = setTimeout(async () => {
       setSaving(true);
       setError(false);
@@ -52,7 +54,7 @@ function useDebouncedSave(collection: string, data: any, ready: boolean, delay =
       } finally {
         setSaving(false);
       }
-    }, delay);
+    }, saveDelay);
 
     return () => clearTimeout(timer.current);
   }, [data, ready, collection, delay]);
@@ -61,6 +63,13 @@ function useDebouncedSave(collection: string, data: any, ready: boolean, delay =
 }
 
 type SyncStatus = "loading" | "ready" | "error";
+
+// Validate prospects have the right shape (not revenue objects in wrong slot)
+function isValidProspects(data: any): boolean {
+  if (!Array.isArray(data)) return false;
+  if (data.length === 0) return true;
+  return data.every((p: any) => p && typeof p.company === "string");
+}
 
 export default function App() {
   const { authenticated, login, logout } = useAuth();
@@ -102,7 +111,11 @@ export default function App() {
         if (cancelled) return;
 
         setClients(data.clients ?? initialClients);
-        setProspects(data.prospects ?? initialProspects);
+        setProspects(
+  data.prospects == null ? initialProspects
+  : isValidProspects(data.prospects) ? data.prospects
+  : []
+);
         setTasks(data.tasks ?? initialTasks);
         setRevenue(data.revenue ?? initialRevenue);
         setExpenses(data.expenses ?? initialExpenses);
@@ -210,7 +223,11 @@ export default function App() {
       });
       const data = await fetchAllData();
       setClients(data.clients ?? initialClients);
-      setProspects(data.prospects ?? initialProspects);
+      setProspects(
+  data.prospects == null ? initialProspects
+  : isValidProspects(data.prospects) ? data.prospects
+  : []
+);
       setTasks(data.tasks ?? initialTasks);
       setRevenue(data.revenue ?? initialRevenue);
       setExpenses(data.expenses ?? initialExpenses);
