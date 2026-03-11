@@ -35,10 +35,12 @@ export async function fetchAllData(): Promise<AllData> {
 }
 
 export async function saveCollection(collection: string, value: any): Promise<void> {
+  const isEmptyArray = Array.isArray(value) && value.length === 0;
   const res = await fetch(`${BASE}/data/${collection}`, {
     method: "PUT",
     headers,
     body: JSON.stringify({ value }),
+    keepalive: isEmptyArray,
   });
   if (!res.ok) {
     const err = await res.text();
