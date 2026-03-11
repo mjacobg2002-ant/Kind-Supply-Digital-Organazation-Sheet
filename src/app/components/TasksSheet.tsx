@@ -1,11 +1,14 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { Plus, X, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import type { Task } from "../data/mockData";
+import type { Client, Prospect } from "../data/mockData";
 
 interface Props {
   tasks: Task[];
   setTasks: React.Dispatch<React.SetStateAction<Task[]>>;
+  clients: Client[];
+  prospects: Prospect[];
 }
 
 const categories: Task["category"][] = ["Client", "Prospect", "Internal", "Finance"];
@@ -30,11 +33,20 @@ const emptyTask: Omit<Task, "id"> = {
 
 const inputClass = "px-2.5 py-2 text-[13px] border border-[#e2e8e0] rounded-md bg-white focus:outline-none focus:border-[#4a7c6a] focus:ring-1 focus:ring-[#4a7c6a]/20 transition-colors";
 
-export function TasksSheet({ tasks, setTasks }: Props) {
+export function TasksSheet({ tasks, setTasks, clients, prospects }: Props) {
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState<Omit<Task, "id">>(emptyTask);
   const [filter, setFilter] = useState<string>("All");
   const [hideCompleted, setHideCompleted] = useState(false);
+
+  // Build dynamic list of related names from clients + prospects
+  const relatedOptions = useMemo(() => {
+    const names: string[] = [];
+    clients.forEach((c) => { if (c.name) names.push(c.name); });
+    prospects.forEach((p) => { if (p.company) names.push(p.company); });
+    // Deduplicate
+    return [...new Set(names)].sort();
+  }, [clients, prospects]);
 
   const remaining = tasks.filter((t) => !t.done).length;
   const highPriority = tasks.filter((t) => !t.done && t.priority === "High").length;
@@ -111,7 +123,10 @@ export function TasksSheet({ tasks, setTasks }: Props) {
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
             <input placeholder="Task title *" value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} className={`sm:col-span-2 ${inputClass}`} />
-            <input placeholder="Related to (client/prospect)" value={draft.related} onChange={(e) => setDraft({ ...draft, related: e.target.value })} className={inputClass} />
+            <select value={draft.related} onChange={(e) => setDraft({ ...draft, related: e.target.value })} className={inputClass}>
+              <option value="">Related to (client/prospect)</option>
+              {relatedOptions.map((name) => <option key={name}>{name}</option>)}
+            </select>
             <input placeholder="Due date" value={draft.due} onChange={(e) => setDraft({ ...draft, due: e.target.value })} className={inputClass} />
             <select value={draft.category} onChange={(e) => setDraft({ ...draft, category: e.target.value as Task["category"] })} className={inputClass}>
               {categories.map((c) => <option key={c}>{c}</option>)}
