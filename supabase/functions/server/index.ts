@@ -18,7 +18,7 @@ app.use(
   }),
 );
 
-const PREFIX = "/make-server-66b280dd";
+const PREFIX = "/server/make-server-66b280dd"
 const COLLECTIONS = ["clients", "prospects", "tasks", "revenue", "expenses", "closedMonths"] as const;
 
 function kvKey(collection: string) {
