@@ -2,10 +2,13 @@ import { useState } from "react";
 import { Plus, X, Phone, Mail, Pencil, Check, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import type { Prospect } from "../data/mockData";
+import type { Client } from "../data/mockData";
 
 interface Props {
   prospects: Prospect[];
   setProspects: React.Dispatch<React.SetStateAction<Prospect[]>>;
+  clients: Client[];
+  setClients: React.Dispatch<React.SetStateAction<Client[]>>;
 }
 
 const statusColors: Record<string, string> = {
@@ -26,7 +29,7 @@ const emptyProspect: Omit<Prospect, "id"> = {
 
 const inputClass = "px-2.5 py-2 text-[13px] border border-[#e2e8e0] rounded-md bg-white focus:outline-none focus:border-[#4a7c6a] focus:ring-1 focus:ring-[#4a7c6a]/20 transition-colors";
 
-export function ProspectsSheet({ prospects, setProspects }: Props) {
+export function ProspectsSheet({ prospects, setProspects, clients, setClients }: Props) {
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState<Omit<Prospect, "id">>(emptyProspect);
   const [editing, setEditing] = useState<string | null>(null);
@@ -46,6 +49,42 @@ export function ProspectsSheet({ prospects, setProspects }: Props) {
 
   const updateField = (id: string, field: keyof Prospect, value: string | number) => {
     setProspects((prev) => prev.map((p) => (p.id === id ? { ...p, [field]: value } : p)));
+
+    // When status changes to "Won", auto-create a client from this prospect
+    if (field === "status" && value === "Won") {
+      const prospect = prospects.find((p) => p.id === id);
+      if (prospect) {
+        // Check if client already exists (by company name) to prevent duplicates
+        const alreadyExists = clients.some(
+          (c) => c.name.toLowerCase().trim() === prospect.company.toLowerCase().trim()
+        );
+        if (!alreadyExists) {
+          const newClient: Client = {
+            id: Date.now().toString(),
+            name: prospect.company,
+            industry: prospect.industry,
+            contact: prospect.contact,
+            email: prospect.email,
+            phone: prospect.phone,
+            retainer: 3500,
+            adMgmt: 1500,
+            adSpend: 0,
+            websiteBuild: 8000,
+            websiteStatus: "Not Started",
+            paymentStatus: "Current",
+            status: "Onboarding",
+            googleAdsLink: "",
+            googleAnalyticsLink: "",
+            startDate: new Date().toLocaleDateString("en-US", { month: "short", year: "numeric" }),
+            notes: prospect.notes ? `From prospect: ${prospect.notes}` : "",
+          };
+          setClients((prev) => [...prev, newClient]);
+          toast.success(`${prospect.company} moved to Clients as Onboarding!`);
+        } else {
+          toast.info(`${prospect.company} already exists in Clients`);
+        }
+      }
+    }
   };
 
   const deleteProspect = (id: string) => {
