@@ -87,7 +87,14 @@ export function FinanceSheet({ clients, revenue, setRevenue, expenses, setExpens
 
   // Live MRR from client data (always reflects current roster)
   const liveMRR = clients.reduce((a, c) => a + n(c.retainer) + n(c.adMgmt), 0);
-  const liveAnnualRunRate = liveMRR * 12;
+
+  // One-time revenue for the selected year (website builds, etc.) — pulls from live client data
+  const selectedYear = selectedMonth.split("-")[0];
+  const yearOneTimeTotal = useMemo(() => {
+    return clients.reduce((a, c) => a + n(c.websiteBuild), 0);
+  }, [clients]);
+
+  const liveAnnualRunRate = liveMRR * 12 + yearOneTimeTotal;
 
   // Recurring monthly expenses total (for accurate take-home projection)
   const recurringExpenseTotal = useMemo(() => {
@@ -800,6 +807,9 @@ export function FinanceSheet({ clients, revenue, setRevenue, expenses, setExpens
           <p className="text-[10px] text-[#8a9e96] uppercase tracking-widest mb-1">Annual Run Rate</p>
           <p className="text-[20px] text-[#2d4a3e] tracking-tight">${liveAnnualRunRate.toLocaleString()}<span className="text-[13px] text-[#8a9e96]">/yr</span></p>
           <p className="text-[11px] text-[#8a9e96]">{clients.length} clients · ${liveMRR.toLocaleString()}/mo MRR</p>
+          {yearOneTimeTotal > 0 && (
+            <p className="text-[10px] text-[#c8973e] mt-0.5">+ ${yearOneTimeTotal.toLocaleString()} one-time in {selectedYear}</p>
+          )}
         </div>
         <div>
           <div className="flex items-center gap-2 mb-1">
