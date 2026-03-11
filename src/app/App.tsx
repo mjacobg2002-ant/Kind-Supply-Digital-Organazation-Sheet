@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Building2, UserSearch, ListChecks, DollarSign, BookOpen, Loader2, RefreshCw, Cloud, CloudOff, CheckCircle2 } from "lucide-react";
+import { Building2, UserSearch, ListChecks, DollarSign, BookOpen, Loader2, RefreshCw, Cloud, CloudOff, CheckCircle2, RotateCcw } from "lucide-react";
 import { Toaster, toast } from "sonner";
 import { initialClients, initialProspects, initialTasks, initialRevenue, initialExpenses, initialClosedMonths } from "./data/mockData";
 import type { Client, Prospect, Task, MonthlyRevenue, Expense } from "./data/mockData";
@@ -9,7 +9,7 @@ import { ProspectsSheet } from "./components/ProspectsSheet";
 import { TasksSheet } from "./components/TasksSheet";
 import { SOPSheet } from "./components/SOPSheet";
 import { FinanceSheet } from "./components/FinanceSheet";
-import { fetchAllData, saveCollection, seedData } from "./lib/api";
+import { fetchAllData, saveCollection, seedData, resetAllData } from "./lib/api";
 
 type Tab = "clients" | "prospects" | "tasks" | "finance" | "sops";
 
@@ -37,7 +37,7 @@ function useDebouncedSave(collection: string, data: any, ready: boolean, delay =
       return;
     }
 
-     clearTimeout(timer.current);
+    clearTimeout(timer.current);
     const isEmptyArray = Array.isArray(data) && data.length === 0;
     const saveDelay = isEmptyArray ? 0 : delay;
     timer.current = setTimeout(async () => {
@@ -46,7 +46,7 @@ function useDebouncedSave(collection: string, data: any, ready: boolean, delay =
       try {
         await saveCollection(collection, data);
         setLastSaved(new Date());
-        console.log(`[autosave] ${collection} saved (${Array.isArray(data) ? data.length + " items" : "object"})`);
+        console.log(`[autosave] ${collection} saved (${Array.isArray(data) ? data.length + " items" : "object"})${isEmptyArray ? " [immediate — empty array]" : ""}`);
       } catch (err) {
         console.error(`[autosave] Failed to save ${collection}:`, err);
         setError(true);
@@ -64,11 +64,22 @@ function useDebouncedSave(collection: string, data: any, ready: boolean, delay =
 
 type SyncStatus = "loading" | "ready" | "error";
 
-// Validate prospects have the right shape (not revenue objects in wrong slot)
-function isValidProspects(data: any): boolean {
+// Validate that loaded data isn't corrupt (empty objects/missing required fields)
+// Empty arrays are valid (user deleted everything) — only catch structurally corrupt data
+function isValidClients(data: any): data is Client[] {
   if (!Array.isArray(data)) return false;
   if (data.length === 0) return true;
-  return data.every((p: any) => p && typeof p.company === "string");
+  return data.every((c: any) => c && typeof c.name === "string" && c.name.trim().length > 0);
+}
+function isValidProspects(data: any): data is Prospect[] {
+  if (!Array.isArray(data)) return false;
+  if (data.length === 0) return true;
+  return data.every((p: any) => p && typeof p.company === "string" && p.company.trim().length > 0);
+}
+function isValidTasks(data: any): data is Task[] {
+  if (!Array.isArray(data)) return false;
+  if (data.length === 0) return true;
+  return data.every((t: any) => t && typeof t.title === "string" && t.title.trim().length > 0);
 }
 
 export default function App() {
@@ -95,31 +106,85 @@ export default function App() {
     async function load() {
       setSyncStatus("loading");
       try {
-        // First, seed mock data for any empty collections
-        await seedData({
-          clients: initialClients,
-          prospects: initialProspects,
-          tasks: initialTasks,
-          revenue: initialRevenue,
-          expenses: initialExpenses,
-          closedMonths: initialClosedMonths,
-        });
-
-        // Then fetch everything
+        // Fetch everything from server
         const data = await fetchAllData();
 
         if (cancelled) return;
 
-        setClients(data.clients ?? initialClients);
-        setProspects(
-  data.prospects == null ? initialProspects
-  : isValidProspects(data.prospects) ? data.prospects
-  : []
-);
-        setTasks(data.tasks ?? initialTasks);
-        setRevenue(data.revenue ?? initialRevenue);
-        setExpenses(data.expenses ?? initialExpenses);
-        setClosedMonths(data.closedMonths ?? initialClosedMonths);
+        console.log("[init] Raw data from server:", {
+          clients: data.clients === null ? "null" : `array(${Array.isArray(data.clients) ? data.clients.length : "??"})`,
+          prospects: data.prospects === null ? "null" : `array(${Array.isArray(data.prospects) ? data.prospects.length : "??"})`,
+          tasks: data.tasks === null ? "null" : `array(${Array.isArray(data.tasks) ? data.tasks.length : "??"})`,
+          revenue: data.revenue === null ? "null" : `array(${Array.isArray(data.revenue) ? data.revenue.length : "??"})`,
+          expenses: data.expenses === null ? "null" : `array(${Array.isArray(data.expenses) ? data.expenses.length : "??"})`,
+          closedMonths: data.closedMonths === null ? "null" : `array(${Array.isArray(data.closedMonths) ? data.closedMonths.length : "??"})`,
+        });
+
+        // Check if this is a completely fresh install (ALL collections are null)
+        const allNull = data.clients === null && data.prospects === null && data.tasks === null
+          && data.revenue === null && data.expenses === null && data.closedMonths === null;
+
+        if (allNull) {
+          // First-time use — seed with initial data and save to server
+          console.log("[init] All collections null — first-time setup, seeding defaults");
+          await Promise.all([
+            saveCollection("clients", initialClients),
+            saveCollection("prospects", initialProspects),
+            saveCollection("tasks", initialTasks),
+            saveCollection("revenue", initialRevenue),
+            saveCollection("expenses", initialExpenses),
+            saveCollection("closedMonths", initialClosedMonths),
+          ]);
+          if (cancelled) return;
+          setClients(initialClients);
+          setProspects(initialProspects);
+          setTasks(initialTasks);
+          setRevenue(initialRevenue);
+          setExpenses(initialExpenses);
+          setClosedMonths(initialClosedMonths);
+        } else {
+          // Existing data — null means "user deleted everything" (empty), not "needs defaults"
+          // Corrupt data → use empty array, NOT mock defaults (mock data causes phantom rows)
+          const loadedClients = data.clients === null ? [] : isValidClients(data.clients) ? data.clients : [];
+          const loadedProspects = data.prospects === null ? [] : isValidProspects(data.prospects) ? data.prospects : [];
+          const loadedTasks = data.tasks === null ? [] : isValidTasks(data.tasks) ? data.tasks : [];
+          const loadedRevenue = data.revenue === null ? [] : Array.isArray(data.revenue) ? data.revenue : [];
+          const loadedExpenses = data.expenses === null ? [] : Array.isArray(data.expenses) ? data.expenses : [];
+          const loadedClosedMonths = data.closedMonths === null ? [] : Array.isArray(data.closedMonths) ? data.closedMonths : [];
+
+          // If any collection was corrupt (NOT null — null is fine), force-save clean empty arrays
+          const corruptCollections: [string, any][] = [];
+          if (data.clients !== null && !isValidClients(data.clients)) {
+            console.warn("[init] Clients data was corrupt, clearing to empty. Raw:", data.clients);
+            corruptCollections.push(["clients", []]);
+          }
+          if (data.prospects !== null && !isValidProspects(data.prospects)) {
+            console.warn("[init] Prospects data was corrupt, clearing to empty. Raw:", data.prospects);
+            corruptCollections.push(["prospects", []]);
+          }
+          if (data.tasks !== null && !isValidTasks(data.tasks)) {
+            console.warn("[init] Tasks data was corrupt, clearing to empty. Raw:", data.tasks);
+            corruptCollections.push(["tasks", []]);
+          }
+          if (data.revenue !== null && !Array.isArray(data.revenue)) {
+            corruptCollections.push(["revenue", []]);
+          }
+          if (data.expenses !== null && !Array.isArray(data.expenses)) {
+            corruptCollections.push(["expenses", []]);
+          }
+
+          if (corruptCollections.length > 0) {
+            console.warn(`[init] Force-saving ${corruptCollections.length} corrupt collections`);
+            await Promise.all(corruptCollections.map(([col, val]) => saveCollection(col, val)));
+          }
+
+          setClients(loadedClients);
+          setProspects(loadedProspects);
+          setTasks(loadedTasks);
+          setRevenue(loadedRevenue);
+          setExpenses(loadedExpenses);
+          setClosedMonths(loadedClosedMonths);
+        }
 
         setSyncStatus("ready");
         // Small delay so the debounced saves don't fire on initial data set
@@ -213,25 +278,24 @@ export default function App() {
     setSyncStatus("loading");
     setDataReady(false);
     try {
-      await seedData({
-        clients: initialClients,
-        prospects: initialProspects,
-        tasks: initialTasks,
-        revenue: initialRevenue,
-        expenses: initialExpenses,
-        closedMonths: initialClosedMonths,
-      });
       const data = await fetchAllData();
-      setClients(data.clients ?? initialClients);
-      setProspects(
-  data.prospects == null ? initialProspects
-  : isValidProspects(data.prospects) ? data.prospects
-  : []
-);
-      setTasks(data.tasks ?? initialTasks);
-      setRevenue(data.revenue ?? initialRevenue);
-      setExpenses(data.expenses ?? initialExpenses);
-      setClosedMonths(data.closedMonths ?? initialClosedMonths);
+      const allNull = data.clients === null && data.prospects === null && data.tasks === null
+        && data.revenue === null && data.expenses === null && data.closedMonths === null;
+      if (allNull) {
+        setClients(initialClients);
+        setProspects(initialProspects);
+        setTasks(initialTasks);
+        setRevenue(initialRevenue);
+        setExpenses(initialExpenses);
+        setClosedMonths(initialClosedMonths);
+      } else {
+        setClients(data.clients === null ? [] : Array.isArray(data.clients) ? data.clients : []);
+        setProspects(data.prospects === null ? [] : Array.isArray(data.prospects) ? data.prospects : []);
+        setTasks(data.tasks === null ? [] : Array.isArray(data.tasks) ? data.tasks : []);
+        setRevenue(data.revenue === null ? [] : Array.isArray(data.revenue) ? data.revenue : []);
+        setExpenses(data.expenses === null ? [] : Array.isArray(data.expenses) ? data.expenses : []);
+        setClosedMonths(data.closedMonths === null ? [] : Array.isArray(data.closedMonths) ? data.closedMonths : []);
+      }
       setSyncStatus("ready");
       setTimeout(() => setDataReady(true), 100);
       toast.success("Reconnected to database");
@@ -239,6 +303,44 @@ export default function App() {
       setSyncStatus("error");
       setDataReady(true);
       toast.error("Still can't connect. Working offline.");
+    }
+  }, []);
+
+  // Reset all data to defaults (wipes KV store and re-seeds)
+  const handleResetData = useCallback(async () => {
+    if (!window.confirm("Reset ALL data to defaults? This will erase any changes you've made.")) return;
+    setSyncStatus("loading");
+    setDataReady(false);
+    try {
+      await resetAllData();
+      await Promise.all([
+        saveCollection("clients", initialClients),
+        saveCollection("prospects", initialProspects),
+        saveCollection("tasks", initialTasks),
+        saveCollection("revenue", initialRevenue),
+        saveCollection("expenses", initialExpenses),
+        saveCollection("closedMonths", initialClosedMonths),
+      ]);
+      setClients(initialClients);
+      setProspects(initialProspects);
+      setTasks(initialTasks);
+      setRevenue(initialRevenue);
+      setExpenses(initialExpenses);
+      setClosedMonths(initialClosedMonths);
+      setSyncStatus("ready");
+      setTimeout(() => setDataReady(true), 100);
+      toast.success("Data reset to defaults");
+    } catch (err) {
+      console.error("[reset] Failed:", err);
+      setClients(initialClients);
+      setProspects(initialProspects);
+      setTasks(initialTasks);
+      setRevenue(initialRevenue);
+      setExpenses(initialExpenses);
+      setClosedMonths(initialClosedMonths);
+      setSyncStatus("error");
+      setDataReady(true);
+      toast.error("Reset failed but loaded defaults locally.");
     }
   }, []);
 
@@ -340,6 +442,14 @@ export default function App() {
           <span className="hidden sm:inline">{clients.length} clients</span>
           <span className="hidden sm:inline">{prospects.filter((p) => !["Won", "Lost"].includes(p.status)).length} in pipeline</span>
           <span className="hidden md:inline">{tasks.filter((t) => !t.done).length} open tasks</span>
+          <button
+            onClick={handleResetData}
+            className="flex items-center gap-1 text-[11px] text-white/30 hover:text-white/60 transition-colors"
+            title="Reset all data to defaults"
+          >
+            <RotateCcw size={12} />
+            <span className="hidden md:inline">Reset</span>
+          </button>
           <LogoutButton onLogout={logout} />
         </div>
       </header>
@@ -367,8 +477,8 @@ export default function App() {
       {/* Content */}
       <main className="px-4 py-4 md:px-8 md:py-8 max-w-[1100px]">
         {activeTab === "clients" && <ClientsSheet clients={clients} setClients={setClients} />}
-        {activeTab === "prospects" && <ProspectsSheet prospects={prospects} setProspects={setProspects} />}
-        {activeTab === "tasks" && <TasksSheet tasks={tasks} setTasks={setTasks} />}
+        {activeTab === "prospects" && <ProspectsSheet prospects={prospects} setProspects={setProspects} clients={clients} setClients={setClients} />}
+        {activeTab === "tasks" && <TasksSheet tasks={tasks} setTasks={setTasks} clients={clients} prospects={prospects} />}
         {activeTab === "finance" && <FinanceSheet clients={clients} revenue={revenue} setRevenue={setRevenue} expenses={expenses} setExpenses={setExpenses} closedMonths={closedMonths} setClosedMonths={setClosedMonths} />}
         {activeTab === "sops" && <SOPSheet />}
       </main>
