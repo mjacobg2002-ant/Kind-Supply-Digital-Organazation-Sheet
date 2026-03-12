@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { Lock, Eye, EyeOff, LogOut } from "lucide-react";
 
 // Change this to your desired password
-const APP_PASSWORD = "kindsupply2026";
+const APP_PASSWORD = "Godsjar";
 const STORAGE_KEY = "ks-digital-os-auth";
 const SESSION_HOURS = 24; // Auto-logout after this many hours
 
