@@ -260,8 +260,10 @@ export default function App() {
               return {
                 ...r,
                 clientName: client.name,
-                retainer: client.retainer,
+                  retainer: client.retainer,
                 adMgmt: client.adMgmt,
+                oneTime: client.websiteBuild > 0 ? client.websiteBuild : 0,
+                oneTimeLabel: client.websiteBuild > 0 ? "Website build" : "",
               };
             }
             return r;
