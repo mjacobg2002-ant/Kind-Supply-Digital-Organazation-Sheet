@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { PGlite } from '@electric-sql/pglite';
 import { migrate } from '../server/db.js';
-import { bootstrap, day, digest, secret } from '../server/security.js';
+import { createWorkspace, bootstrap, day, digest, secret } from '../server/security.js';
+import { providerWorkspace } from '../server/integrations.js';
 import { initialState, newRecord, updateState } from '../server/model.js';
 import { financialMetrics, receivedPayments } from '../src/finance.js';
 import { importStripeObject, monthlyAmount, applyStripeResourceEvent } from '../server/stripe-data.js';
@@ -172,4 +173,26 @@ test('Stripe webhook retries reconcile the latest invoice state once',async()=>{
     assert.deepEqual(state.payments[0].paymentIntents,['pi_fixture']);
     assert.equal(state.activity.filter(row=>row.title.startsWith('Stripe')).length,1);
   }finally{await db.close();}
+});
+
+test('Provider credentials stay with the first workspace when more workspaces are created',async()=>{
+  const db=new PGlite();
+  const prior=process.env.INTEGRATION_WORKSPACE_ID;
+  delete process.env.INTEGRATION_WORKSPACE_ID;
+  try {
+    await migrate(db);
+    const first=await bootstrap(db,{email:'owner@example.com',password:'Test!123',name:'Owner',workspace:'Agency'});
+    assert.equal(await providerWorkspace(db),first.id);
+    const user=(await db.query('SELECT id FROM crm_users')).rows[0];
+    const second=await createWorkspace(db,user.id,'Client');
+    assert.equal(await providerWorkspace(db),first.id);
+    await migrate(db);
+    assert.equal(await providerWorkspace(db),first.id);
+    process.env.INTEGRATION_WORKSPACE_ID=second.id;
+    assert.equal(await providerWorkspace(db),second.id);
+  } finally {
+    if(prior===undefined)delete process.env.INTEGRATION_WORKSPACE_ID;
+    else process.env.INTEGRATION_WORKSPACE_ID=prior;
+    await db.close();
+  }
 });

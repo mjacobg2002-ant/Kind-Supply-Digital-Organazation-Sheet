@@ -2,6 +2,7 @@ import { audit, acceptProposal, findPublic, getRecord, importContacts, publicLin
 import { database, transaction } from './db.js';
 import { baseUrl, createWorkspace, day, digest, emailAddress, encodePassword, grantSession, rateLimit, readJson, readRaw, reject, sameOrigin, secret, session, setCookie, validPassword } from './security.js';
 import { billingEnabled, checkout, priceIds, stripeWebhook, syncStripe } from './billing.js';
+import { providerWorkspace } from './integrations.js';
 import { communicationStatus, resendInbound, sendMessage, twilioInbound } from './comms.js';
 
 import { authorizeCalendar, calendarCallback, calendarStatus, disconnectCalendar, listGoogleCalendars, selectGoogleCalendar, syncGoogleCalendar, useGoogleAppointment } from './calendar.js';
@@ -9,7 +10,7 @@ import { authorizeCalendar, calendarCallback, calendarStatus, disconnectCalendar
 const managers = ['owner','admin'];
 const editors = ['owner','admin','member'];
 const membershipRoles = ['admin','member','viewer'];
-const providersFor = id => Boolean(process.env.INTEGRATION_WORKSPACE_ID && process.env.INTEGRATION_WORKSPACE_ID === id);
+const providersFor = async (db,id) => (await providerWorkspace(db)) === id;
 
 function send(res, status, value, contentType = 'application/json; charset=utf-8') {
   res.statusCode = status;
@@ -43,7 +44,7 @@ async function workspaceView(db, id, uid) {
   const members = await db.query(`SELECT u.id,u.name,u.email,m.role FROM crm_memberships m
     JOIN crm_users u ON u.id=m.user_id WHERE m.workspace_id=$1 ORDER BY u.name`, [id]);
   return { ...workspace, members: members.rows,
-    integrations: { google:await calendarStatus(db,id), ...(providersFor(id)
+    integrations: { google:await calendarStatus(db,id), ...(await providersFor(db,id)
       ? { stripe:billingEnabled(), stripePrices:managers.includes(workspace.role) ? priceIds() : [], ...communicationStatus() }
       : { stripe:false, stripePrices:[], email:false, sms:false, inboundEmail:false }) }
   };
@@ -111,13 +112,13 @@ async function workspaceAction(db, ws, route, method, req, user) {
   if (area==='stripe-sync') {
     const workspace=await workspaceView(db,ws,user.id);
     if (!managers.includes(workspace.role)) reject(403,'Only owners and administrators can sync Stripe.');
-    if (!providersFor(ws)) reject(503,'Assign Stripe to this workspace in integration settings first.');
+    if (!await providersFor(db,ws)) reject(503,'Assign Stripe to this workspace in integration settings first.');
     return syncStripe(db,ws,user,input);
   }
   if (area === 'import') return apply(editors, (state, tx) => importContacts(state, tx, ws, input.rows, user));
   if (area === 'checkout' || area === 'send') {
     await workspaceView(db, ws, user.id);
-    if (!providersFor(ws)) reject(503, 'Provider integrations are not configured for this workspace.');
+    if (!await providersFor(db,ws)) reject(503, 'Provider integrations are not configured for this workspace.');
     return area === 'checkout' ? checkout(db, ws, user, input, req) : sendMessage(db, ws, input.id, input.version, user);
   }
   if (area === 'stages') return apply(managers, state => {
@@ -194,7 +195,7 @@ export function createHandler({ db: provided, demo = false } = {}) {
         const content = await readRaw(req, 750000, true);
         if (key === 'stripe') return send(res, 200, await stripeWebhook(db, content, req.headers['stripe-signature']));
         const entry = await findPublic(db, token, 'inbound');
-        if (!providersFor(entry.workspace_id)) reject(404, 'Provider integrations are not enabled for this workspace.');
+        if (!await providersFor(db,entry.workspace_id)) reject(404, 'Provider integrations are not enabled for this workspace.');
         if (key === 'resend') return send(res, 200, await resendInbound(db, entry.workspace_id, req, content));
         if (key === 'sms' || key === 'voice') return send(res, 200, await twilioInbound(db, entry.workspace_id, req, target, content, key), 'text/xml; charset=utf-8');
         reject(404, 'Webhook not found.');

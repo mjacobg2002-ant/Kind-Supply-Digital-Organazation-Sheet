@@ -42,6 +42,9 @@ export async function createWorkspace(db, userId, name) {
   const state = initialState();
   await db.query('INSERT INTO crm_workspaces VALUES ($1,$2,$3)', [id, name, JSON.stringify(state)]);
   await db.query("INSERT INTO crm_memberships VALUES ($1,$2,'owner')", [id, userId]);
+  await db.query(`INSERT INTO crm_provider_bindings(provider,workspace_id)
+    SELECT 'primary',$1 WHERE (SELECT count(*) FROM crm_workspaces)=1
+    ON CONFLICT DO NOTHING`, [id]);
   return { id, name };
 }
 

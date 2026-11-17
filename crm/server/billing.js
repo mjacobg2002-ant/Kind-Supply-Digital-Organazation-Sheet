@@ -2,6 +2,7 @@ import Stripe from 'stripe';
 import { randomBytes } from 'node:crypto';
 import { audit, getRecord, newRecord, runWorkflows, updateState } from './model.js';
 import { applyStripeResourceEvent, importStripePage } from './stripe-data.js';
+import { providerWorkspace } from './integrations.js';
 import { baseUrl, reject } from './security.js';
 
 const eventTypes = new Set([
@@ -106,7 +107,15 @@ export async function checkout(db, workspace, user, input, req) {
 
 export async function syncStripe(db,workspace,user,input) {
   if (!billingEnabled()) reject(503,'Configure Stripe and its webhook first.');
-  return importStripePage(db,workspace,user,input,client());
+  try {
+    return await importStripePage(db,workspace,user,input,client());
+  } catch (error) {
+    if (error.status) throw error;
+    if (error.type==='StripeAuthenticationError') reject(502,'Stripe could not authenticate this API key. Check STRIPE_API_KEY in Vercel.');
+    if (error.type==='StripePermissionError') reject(502,'The restricted Stripe key needs Read access to '+input.kind+'. Update the key permissions and retry.');
+    if (error.type==='StripeRateLimitError') reject(503,'Stripe is rate-limiting the import. Wait a moment and select Sync Stripe again.');
+    reject(502,'Stripe could not load account activity. Check the key permissions and try again.');
+  }
 }
 
 export async function stripeWebhook(db, raw, signature) {
@@ -125,7 +134,7 @@ export async function stripeWebhook(db, raw, signature) {
   if (seen.rows.length) return { received: true };
   const object = event.data.object;
   const metadata = object.metadata;
-  const workspace = process.env.INTEGRATION_WORKSPACE_ID;
+  const workspace = await providerWorkspace(db);
   if (!workspace) return { received:true };
   if (!type.startsWith('checkout.')) {
     await applyStripeResourceEvent(db,workspace,event,stripe);

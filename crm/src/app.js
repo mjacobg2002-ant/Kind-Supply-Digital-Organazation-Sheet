@@ -52,6 +52,7 @@ function navigate(page) {
   history.replaceState(null,'','#' + page);
   render();
   if (page==='calendar' && ui.workspace?.integrations.google?.connected) syncConnectedCalendar(true);
+  if (page==='billing' && ui.workspace?.integrations.stripe && !ui.workspace.state.billingSync?.charges?.complete) syncStripeAccount();
   window.scrollTo(0,0);
 }
 
@@ -311,7 +312,7 @@ function stripeSetup() {
   const hook=location.origin+endpoint('webhook/stripe');
   modal('Connect Stripe reporting',`<ol class="setup-instructions">
     <li>Add a restricted Stripe key as <code>STRIPE_API_KEY</code> in the CRM’s Vercel project. Allow Checkout creation and read access to charges, refunds, invoices, invoice payments, prices, and subscriptions.</li>
-    <li>Set <code>INTEGRATION_WORKSPACE_ID</code> to <code>${h(ui.workspace.id)}</code>.</li>
+    <li>The first agency workspace is connected automatically. To assign Stripe to another workspace, set <code>INTEGRATION_WORKSPACE_ID</code> to that workspace’s ID.</li>
     <li>In Stripe Workbench, add a webhook endpoint using <code>${h(hook)}</code>, then save its signing secret in Vercel as <code>STRIPE_WEBHOOK_SECRET</code>. The repository guide lists the required payment and subscription events.</li>
     <li>Redeploy, then select Sync Stripe on the Payments page to import existing payments and subscriptions. New billing events update the dashboard automatically.</li>
   </ol><p class="setup-note">Configure Stripe Tax separately if tax collection applies to your services.</p><div class="action-row">
@@ -536,6 +537,7 @@ async function startWorkspace() {
     if (status==='connected') {notify('Google Calendar connected. Choose the calendar to sync.');await googleSettings();}
     else notify(status==='denied' ? 'Google Calendar connection was canceled.' : 'Google Calendar could not connect. Start again from Settings.',true);
   } else if (ui.page==='calendar') syncConnectedCalendar(true);
+  if (ui.workspace.integrations.stripe && !ui.workspace.state.billingSync?.charges?.complete) syncStripeAccount();
 }
 
 document.addEventListener('click',event => {

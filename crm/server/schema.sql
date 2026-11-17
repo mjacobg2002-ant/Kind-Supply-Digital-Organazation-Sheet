@@ -72,3 +72,11 @@ CREATE INDEX IF NOT EXISTS crm_google_oauth_expiry ON crm_google_oauth(expires_a
 ALTER TABLE crm_google_connections ADD COLUMN IF NOT EXISTS sync_query jsonb;
 ALTER TABLE crm_google_connections ADD COLUMN IF NOT EXISTS sync_seen jsonb;
 ALTER TABLE crm_google_connections ADD COLUMN IF NOT EXISTS full_sync_at timestamptz;
+
+CREATE TABLE IF NOT EXISTS crm_provider_bindings (
+  provider text PRIMARY KEY,
+  workspace_id text NOT NULL REFERENCES crm_workspaces(id) ON DELETE CASCADE
+);
+INSERT INTO crm_provider_bindings(provider,workspace_id)
+SELECT 'primary', min(id) FROM crm_workspaces HAVING count(*)=1
+ON CONFLICT DO NOTHING;
