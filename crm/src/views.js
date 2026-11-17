@@ -1,3 +1,4 @@
+import { billingView } from './billing-view.js';
 import { dashboard, reports } from './dashboard.js';
 import { avatar, button, chip, contactName, day, dayLabel, dollars, edit, example, fieldSelect, h, icon, panel, primary, safeLink, stageName, statusTone, table, timeLabel } from './ui.js';
 
@@ -103,25 +104,33 @@ function inbox(s, filters, canEdit, integrations) {
   return `<section class="panel">${conversation}</section>`;
 }
 
-function calendar(s, filters, canEdit) {
+function calendar(s, filters, canEdit, integrations, canManage) {
   const timezone = s.settings.timezone;
   const month = filters.month || day(new Date(),timezone).slice(0,7);
   const monthStart = new Date(month + '-01T12:00:00Z');
   const offset = (monthStart.getUTCDay() + 6) % 7;
   const numDays = new Date(Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth()+1,0)).getUTCDate();
-  const appointments = s.events.filter(row => day(new Date(row.startsAt),timezone).startsWith(month)).sort((a,b) => a.startsAt.localeCompare(b.startsAt));
+  const eventDay = row => row.allDay ? row.allDayStart : day(new Date(row.startsAt),timezone);
+  const appointments = s.events.filter(row => eventDay(row).startsWith(month)).sort((a,b) => a.startsAt.localeCompare(b.startsAt));
   const grid = `<div class="calendar-grid">${['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(name => `<div class="calendar-dayname">${name}</div>`).join('')}
     ${'<div class="calendar-blank"></div>'.repeat(offset)}
     ${Array.from({length:numDays},(_,i) => {
       const date = month + '-' + String(i+1).padStart(2,'0');
-      const rows = appointments.filter(row => day(new Date(row.startsAt),timezone) === date);
+      const rows = appointments.filter(row => eventDay(row) === date);
       return `<div class="calendar-day ${date === day(new Date(),timezone) ? 'today' : ''}"><span>${i+1}</span>
-        ${rows.map(row => `<button type="button" title="${h(row.title)}" data-action="${canEdit ? 'edit:events' : 'event'}" data-id="${h(row.id)}">${h(row.title)}</button>`).join('')}</div>`;
+        ${rows.map(row => `<button type="button" title="${h(row.title)}" data-action="${canEdit && !row.allDay ? 'edit:events' : 'event'}" data-id="${h(row.id)}">${h(row.title)}</button>`).join('')}</div>`;
     }).join('')}${'<div class="calendar-blank"></div>'.repeat((7 - (numDays + offset) % 7) % 7)}</div>`;
-  return `<div class="stack">${panel(new Intl.DateTimeFormat('en-US',{month:'long',year:'numeric',timeZone:'UTC'}).format(monthStart),timezone,
+  const google=integrations.google || {};
+  const connection=`<div class="notice calendar-connection">${icon('calendar-days')}<div><strong>${google.connected ? h(google.name || 'Google Calendar') : 'Connect Google Calendar'}</strong>
+    <span>${google.connected ? google.issue ? h(google.issue) : 'Syncs when opened and every five minutes while the workspace is open.' : 'Bring your Google appointments into this calendar and sync CRM appointment changes.'}</span></div>
+    <div class="action-row">${google.connected ? button('Sync Google',{glyph:'refresh-cw',action:'google-sync'}) : canManage ? button('Connect calendar',{glyph:'link',action:'google-connect'}) : ''}
+    ${canManage ? button('Calendar settings',{glyph:'settings',action:'google-settings'}) : ''}</div></div>`;
+  return `<div class="stack">${connection}${panel(new Intl.DateTimeFormat('en-US',{month:'long',year:'numeric',timeZone:'UTC'}).format(monthStart),timezone,
     grid,`<div class="action-row">${button('',{glyph:'chevron-left',action:'month-prev',title:'Previous month'})}${button('Today',{action:'month-current'})}${button('',{glyph:'chevron-right',action:'month-next',title:'Next month'})}</div>`)}
-    ${panel('Appointments','',table(['Appointment','Practice','Starts','Ends','Status',''],appointments.map(row => [
-      cellLines(row.title,row.location),h(contactName(s,row.contactId)),h(timeLabel(row.startsAt,timezone)),h(timeLabel(row.endsAt,timezone)),stateBadge(row.status),canEdit ? edit('events',row) : ''
+    ${panel('Appointments','',table(['Appointment','Practice','Starts','Ends','Status','Google sync',''],appointments.map(row => [
+      cellLines(row.title,row.location),h(contactName(s,row.contactId)),h(row.allDay ? row.allDayStart+' · All day' : timeLabel(row.startsAt,timezone)),h(row.allDay ? row.allDayEnd : timeLabel(row.endsAt,timezone)),stateBadge(row.status),
+      row.googleSync ? chip(row.googleSync,row.googleSync==='Synced' ? 'green' : 'amber') : '—',
+      row.googleSync==='Conflict' ? button('Use Google version',{action:'google-resolve',id:row.id}) : canEdit && !row.allDay ? edit('events',row) : ''
     ]),example('calendar-days','No appointments this month','Add a meeting or move to another month.')))}</div>`;
 }
 
@@ -132,16 +141,6 @@ function proposals(s, canEdit) {
   ]),example('file-text','No proposals yet','Create a proposal from an opportunity.')));
 }
 
-function billing(s, integrations) {
-  return `<div class="stack">${!integrations.stripe ? `<div class="notice">${icon('credit-card')}<div><strong>Connect Stripe to accept payments</strong><span>Add your Stripe key and webhook secret to the Vercel project.</span></div>${button('Integration settings',{action:'nav:settings'})}</div>` : ''}
-    ${panel('Checkout and invoices','',table(['Opportunity','Billing type','Amount','Status','Link'],s.payments.map(row => [
-      cellLines(row.title,row.risk || ''),h(({invoice:'Invoice',payment:'One-time',subscription:'Subscription checkout'})[row.mode] || row.mode),
-      dollars(row.collectedAmount ?? row.amount),stateBadge(row.status),row.status === 'Open' && Date.parse(row.expiresAt) > Date.now() && row.checkoutUrl ? button('Copy link',{glyph:'copy',action:'copy-payment',id:row.id}) : safeLink(row.invoiceUrl,'Invoice')
-    ]),example('credit-card','No payments recorded','Start with a Stripe Checkout link for an opportunity.')))}
-    ${panel('Subscriptions','',table(['Opportunity','Monthly amount','Status','Renewal'],s.subscriptions.map(row => [
-      h(row.title),dollars(row.amount),stateBadge(row.status),row.cancelAtPeriodEnd ? 'Ends this billing period' : 'Managed in Stripe'
-    ]),example('hand-coins','No subscriptions yet','Stripe subscription activity will appear here.')))}</div>`;
-}
 
 function workflows(s, canManage) {
   return `<div class="stack">${panel('Automation rules','',table(['Workflow','Trigger','Action','Status',''],s.workflows.map(row => [
@@ -170,6 +169,11 @@ function settings(workspace, ui) {
   return `<div class="dashboard-grid">${panel('Workspace profile','',`<dl class="settings-list"><dt>Name</dt><dd>${h(name)}</dd><dt>Time zone</dt><dd>${h(s.settings.timezone)}</dd><dt>Your role</dt><dd>${chip(role)}</dd>${manager ? `<dt>Workspace ID</dt><dd><code>${h(workspace.id)}</code></dd>` : ''}</dl>`,
     manager ? button('Edit profile',{glyph:'square-pen',action:'workspace-settings'}) : '')}
     ${panel('Integrations','Provider credentials are configured on the Vercel project.',`<ul class="followups">${integrationRows.map(([service,desc,connected,glyph]) => `<li><span class="feed-icon">${icon(glyph)}</span><div class="row-main"><strong>${service}</strong><span>${desc}</span></div>${chip(connected ? 'Configured' : 'Setup needed',connected ? 'green' : 'neutral')}</li>`).join('')}</ul>`)}
+    ${panel('Google Calendar',integrations.google?.connected ? 'Connected to '+integrations.google.name : 'Connect a calendar for appointment tracking.',
+      `<dl class="settings-list"><dt>Status</dt><dd>${chip(integrations.google?.connected ? 'Connected' : 'Setup needed',integrations.google?.connected ? 'green' : 'neutral')}</dd>
+      <dt>Last sync</dt><dd>${h(timeLabel(integrations.google?.lastSync,s.settings.timezone))}</dd>
+      ${integrations.google?.issue ? `<dt>Attention</dt><dd>${h(integrations.google.issue)}</dd>` : ''}</dl>`,manager ? button('Manage calendar',{glyph:'calendar-days',action:'google-settings'}) : '')}
+    ${panel('Stripe reporting','Payments, recurring revenue, and recovery.',`<div class="settings-links">${button(integrations.stripe ? 'View payments' : 'Set up Stripe',{glyph:'credit-card',action:integrations.stripe ? 'nav:billing' : 'stripe-setup'})}</div>`)}
     ${panel('Team','',table(['Name','Email','Role',''],members.map(member => [
       cellLines(member.name,''),h(member.email),chip(member.role),role === 'owner' && member.role !== 'owner' ? button('Manage',{action:'member',id:member.id}) : ''
     ]),''),manager && !ui.demo ? button('Invite member',{glyph:'plus',action:'invite'}) : '', 'span-all')}
@@ -184,18 +188,18 @@ export function renderPage(workspace, ui) {
   const manager = ['owner','admin'].includes(workspace.role);
   const filters = ui.filters;
   switch (ui.page) {
-    case 'dashboard': return dashboard(s,filters.period);
+    case 'dashboard': return dashboard(s,filters.period,integrations,ui.demo);
     case 'contacts': return contacts(s,filters,canEdit);
     case 'pipeline': return pipeline(s,filters,canEdit,manager);
     case 'tasks': return tasks(s,filters,canEdit);
     case 'inbox': return inbox(s,filters,canEdit,integrations);
-    case 'calendar': return calendar(s,filters,canEdit);
+    case 'calendar': return calendar(s,filters,canEdit,integrations,manager);
     case 'proposals': return proposals(s,canEdit);
-    case 'billing': return billing(s,integrations);
+    case 'billing': return billingView(s,integrations,filters,manager,ui.demo);
     case 'workflows': return workflows(s,manager);
     case 'forms': return forms(s,manager);
     case 'reports': return reports(s,filters.period);
     case 'settings': return settings(workspace,ui);
-    default: return dashboard(s,filters.period);
+    default: return dashboard(s,filters.period,integrations,ui.demo);
   }
 }

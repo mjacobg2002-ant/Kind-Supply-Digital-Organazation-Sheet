@@ -48,3 +48,27 @@ CREATE TABLE IF NOT EXISTS crm_public_links (
   record_id text NOT NULL
 );
 CREATE INDEX IF NOT EXISTS crm_public_workspace ON crm_public_links(workspace_id);
+CREATE TABLE IF NOT EXISTS crm_google_connections (
+  workspace_id text PRIMARY KEY REFERENCES crm_workspaces(id) ON DELETE CASCADE,
+  user_id text NOT NULL REFERENCES crm_users(id) ON DELETE CASCADE,
+  tokens text NOT NULL,
+  calendar_id text NOT NULL DEFAULT 'primary',
+  calendar_name text NOT NULL DEFAULT 'Primary calendar',
+  calendar_timezone text NOT NULL DEFAULT 'UTC',
+  sync_token text,
+  last_sync timestamptz,
+  sync_until timestamptz,
+  connection_id text NOT NULL,
+  issue text NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS crm_google_oauth (
+  token text PRIMARY KEY,
+  workspace_id text NOT NULL REFERENCES crm_workspaces(id) ON DELETE CASCADE,
+  user_id text NOT NULL REFERENCES crm_users(id) ON DELETE CASCADE,
+  expires_at timestamptz NOT NULL
+);
+CREATE INDEX IF NOT EXISTS crm_google_oauth_expiry ON crm_google_oauth(expires_at);
+
+ALTER TABLE crm_google_connections ADD COLUMN IF NOT EXISTS sync_query jsonb;
+ALTER TABLE crm_google_connections ADD COLUMN IF NOT EXISTS sync_seen jsonb;
+ALTER TABLE crm_google_connections ADD COLUMN IF NOT EXISTS full_sync_at timestamptz;

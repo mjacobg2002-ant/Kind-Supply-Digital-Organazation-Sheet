@@ -1,8 +1,10 @@
 import { audit, acceptProposal, findPublic, getRecord, importContacts, publicLink, publicProposal, remove, rolesFor, saveStages, submitLead, text, updateState, upsert } from './model.js';
 import { database, transaction } from './db.js';
 import { baseUrl, createWorkspace, day, digest, emailAddress, encodePassword, grantSession, rateLimit, readJson, readRaw, reject, sameOrigin, secret, session, setCookie, validPassword } from './security.js';
-import { billingEnabled, checkout, priceIds, stripeWebhook } from './billing.js';
+import { billingEnabled, checkout, priceIds, stripeWebhook, syncStripe } from './billing.js';
 import { communicationStatus, resendInbound, sendMessage, twilioInbound } from './comms.js';
+
+import { authorizeCalendar, calendarCallback, calendarStatus, disconnectCalendar, listGoogleCalendars, selectGoogleCalendar, syncGoogleCalendar, useGoogleAppointment } from './calendar.js';
 
 const managers = ['owner','admin'];
 const editors = ['owner','admin','member'];
@@ -41,9 +43,9 @@ async function workspaceView(db, id, uid) {
   const members = await db.query(`SELECT u.id,u.name,u.email,m.role FROM crm_memberships m
     JOIN crm_users u ON u.id=m.user_id WHERE m.workspace_id=$1 ORDER BY u.name`, [id]);
   return { ...workspace, members: members.rows,
-    integrations: providersFor(id)
+    integrations: { google:await calendarStatus(db,id), ...(providersFor(id)
       ? { stripe:billingEnabled(), stripePrices:managers.includes(workspace.role) ? priceIds() : [], ...communicationStatus() }
-      : { stripe:false, stripePrices:[], email:false, sms:false, inboundEmail:false }
+      : { stripe:false, stripePrices:[], email:false, sms:false, inboundEmail:false }) }
   };
 }
 
@@ -74,15 +76,43 @@ async function workspaceAction(db, ws, route, method, req, user) {
   const input = await readJson(req);
   const apply = (roles, run) => updateState(db, ws, run, user.id, roles);
   if (area === 'records' && key) {
-    return apply(rolesFor(key), async (state, tx) => {
+    const result = await apply(rolesFor(key), async (state, tx) => {
       if (action === 'delete') {
         remove(state, key, input.id, input.version, user);
         if (key === 'forms') await tx.query("DELETE FROM crm_public_links WHERE workspace_id=$1 AND kind='capture' AND record_id=$2", [ws, input.id]);
         return { deleted: true };
       }
       if (action) reject(404, 'Action not found.');
-      return upsert(state, tx, ws, key, input, user);
+      const result = await upsert(state, tx, ws, key, input, user);
+      if (key==='events') {
+        const connected=await tx.query('SELECT calendar_id FROM crm_google_connections WHERE workspace_id=$1',[ws]);
+        if (connected.rows[0] && (!result.google || result.google.calendarId===connected.rows[0].calendar_id)) {
+          result.googleSync='Pending';
+        }
+      }
+      return result;
     });
+    if (key==='events' && !action && result.googleSync==='Pending') {
+      try { await syncGoogleCalendar(db,ws,user); }
+      catch { return {...result,calendarIssue:'Saved in CRM. Google Calendar sync needs attention.'}; }
+    }
+    return result;
+  }
+  if (area==='calendar') {
+    await workspaceView(db,ws,user.id);
+    if (key==='connect') return authorizeCalendar(db,ws,user,req);
+    if (key==='calendars') return listGoogleCalendars(db,ws,user);
+    if (key==='select') return selectGoogleCalendar(db,ws,user,input);
+    if (key==='sync') return syncGoogleCalendar(db,ws,user);
+    if (key==='disconnect') return disconnectCalendar(db,ws,user);
+    if (key==='resolve') return useGoogleAppointment(db,ws,user,input.id);
+    reject(404,'Calendar action not found.');
+  }
+  if (area==='stripe-sync') {
+    const workspace=await workspaceView(db,ws,user.id);
+    if (!managers.includes(workspace.role)) reject(403,'Only owners and administrators can sync Stripe.');
+    if (!providersFor(ws)) reject(503,'Assign Stripe to this workspace in integration settings first.');
+    return syncStripe(db,ws,user,input);
   }
   if (area === 'import') return apply(editors, (state, tx) => importContacts(state, tx, ws, input.rows, user));
   if (area === 'checkout' || area === 'send') {
@@ -150,6 +180,16 @@ export function createHandler({ db: provided, demo = false } = {}) {
       if (area === 'health' && method === 'GET') return send(res, 200, { ready: Boolean(provided || process.env.DATABASE_URL), demo });
       if (demo) reject(401, 'This preview uses sample data.');
       const db = provided ?? database();
+      if (area==='google-calendar' && method==='GET') {
+        let target;
+        try { target=await calendarCallback(db,req); }
+        catch { target=baseUrl(req)+'/?google=error#settings'; }
+        res.statusCode=303;
+        res.setHeader('Location',target);
+        res.setHeader('Cache-Control','no-store');
+        res.end();
+        return;
+      }
       if (area === 'webhook' && method === 'POST') {
         const content = await readRaw(req, 750000, true);
         if (key === 'stripe') return send(res, 200, await stripeWebhook(db, content, req.headers['stripe-signature']));

@@ -1,3 +1,4 @@
+import { financialSummary } from './billing-view.js';
 import { avatar, button, chip, contactName, day, dayLabel, dollars, example, h, icon, panel, timeLabel } from './ui.js';
 
 export function metrics(s, today) {
@@ -77,7 +78,7 @@ export function activityFeed(s, limit = 5, items = s.activity) {
   </li>`).join('')}</ul>` : example('activity','No activity yet','Changes to your workspace will appear here.');
 }
 
-export function dashboard(s, period) {
+export function dashboard(s, period, integrations = {}, demo = false) {
   const today = day(new Date(), s.settings.timezone);
   const m = metrics(s, today);
   const cards = `<div class="metrics">
@@ -87,11 +88,15 @@ export function dashboard(s, period) {
     ${metricCard('Follow-ups due', m.due.length + m.followups.filter(c => !m.due.some(t => t.contactId === c.id)).length, 'Due today or overdue', 'clock', 'peach', 'tasks')}
   </div>`;
   const periodControl = `<label class="sr-only" for="period">Activity period</label><select id="period" class="select small" data-filter="period"><option value="28">Last 4 weeks</option><option value="56" ${period === '56' ? 'selected' : ''}>Last 8 weeks</option></select>`;
-  return cards + `<div class="dashboard-grid">
+  const upcoming=s.events.filter(row=>row.status==='Scheduled' && Date.parse(row.endsAt)>Date.now())
+    .sort((a,b)=>a.startsAt.localeCompare(b.startsAt)).slice(0,4);
+  return cards + financialSummary(s,integrations,'month',demo,true) + `<div class="dashboard-grid">
     ${panel('Sales activity', 'Weekly activity across your workspace', activityChart(s, period, s.settings.timezone), periodControl, 'chart-panel')}
     ${panel('Follow-up queue', 'Today and overdue', dueList(s, m, today), button('', { glyph:'arrow-right', action:'nav:tasks', kind:'ghost', title:'Open tasks' }))}
     ${panel('Pipeline by stage', 'Opportunities across your sales pipeline', stageSnapshot(s), button('View pipeline', { glyph:'arrow-right', action:'nav:pipeline', kind:'ghost' }))}
     ${panel('Recent activity', '', activityFeed(s, 4), button('', { glyph:'arrow-right', action:'nav:reports', kind:'ghost', title:'Open reports' }))}
+    ${panel('Upcoming appointments',s.settings.timezone,upcoming.length ? `<ul class="followups">${upcoming.map(row=>`<li><span class="feed-icon">${icon('calendar-days')}</span><div class="row-main"><strong>${h(row.title)}</strong><span>${h(row.allDay ? row.allDayStart+' · All day' : timeLabel(row.startsAt,s.settings.timezone))}</span></div>${chip(row.google ? 'Google' : 'CRM',row.google ? 'blue' : 'neutral')}</li>`).join('')}</ul>` : example('calendar-days','No upcoming appointments','Add an appointment or connect Google Calendar.'),button('Open calendar',{action:'nav:calendar',glyph:'arrow-right',kind:'ghost'}),'span-all')}
+
   </div>`;
 }
 

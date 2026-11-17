@@ -73,8 +73,11 @@ function seed() {
     proposals: [record('p1', { dealId:'d0',contactId:'c0',title:'Dental Growth Partnership',terms:'Website design, local SEO, and Google Ads management for Cedar Grove Dental.',amount:200000,cadence:'Monthly',expires:when(10).slice(0,10),status:'Draft' })],
     workflows: [record('w1',{title:'New lead follow-up',trigger:'Lead created',action:'Create task',value:'Review new inquiry',delay:1,active:true,source:'',stage:'',subject:''})],
     forms: [record('f1',{title:'Request a website assessment',description:'Tell us about your practice and what you’d like to improve.',type:'Lead inquiry',stage:'new',active:true})],
-    payments: [record('b1',{dealId:'d5',contactId:'c5',title:'Northline Dental Care',mode:'invoice',status:'Paid',amount:200000,collectedAmount:200000,currency:'usd',paidAt:when(-4)})],
-    subscriptions: [], runs: [], settings: { timezone:'America/New_York', inbound:'' }
+    payments: [record('demo_failure',{title:'Alder House Dental',contactId:'c11',dealId:'d11',invoiceId:'in_demo_failure',mode:'invoice',status:'Payment failed',amount:200000,outstandingAmount:200000,currency:'usd',nextAttemptAt:when(1),createdAt:when(-1)}),record('b1',{dealId:'d5',contactId:'c5',title:'Northline Dental Care',mode:'invoice',status:'Paid',amount:200000,collectedAmount:200000,currency:'usd',paidAt:when(-4)})],
+    subscriptions: [
+      {id:'sub_demo_active',title:'Northline Dental Care',currency:'usd',status:'active',mrr:200000,amount:200000,createdAt:when(-40)},
+      {id:'sub_demo_pastdue',title:'Alder House Dental',currency:'usd',status:'past_due',mrr:200000,amount:200000,createdAt:when(-30)}
+    ], runs: [], settings: { timezone:'America/New_York', inbound:'' }
   };
 }
 
@@ -97,7 +100,7 @@ export function demoSpace(id) {
   const space = prepareDemo().find(row => row.id === id);
   const saved = localStorage.getItem(keyFor(id));
   return { ...space, state:saved ? JSON.parse(saved) : structuredClone(seed()), members:[{ ...sampleUser, role:'owner' }],
-    integrations:{ stripe:false,stripePrices:[],email:false,sms:false,inboundEmail:false } };
+    integrations:{ stripe:false,stripePrices:[],email:false,sms:false,inboundEmail:false,google:{configured:false,connected:false} } };
 }
 export function demoSave(workspace, route, input) {
   const s = workspace.state;

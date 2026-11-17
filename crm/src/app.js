@@ -15,6 +15,8 @@ const ui = { page:'dashboard', filters:{}, demo:false, workspace:null, workspace
 let modalSubmit;
 let toastTimer;
 let busy = false;
+let calendarSyncRunning = false;
+let stripeSyncRunning = false;
 const manager = () => ['admin','owner'].includes(ui.workspace?.role);
 const canEdit = () => ui.workspace && ui.workspace.role !== 'viewer';
 const state = () => ui.workspace.state;
@@ -49,6 +51,7 @@ function navigate(page) {
   ui.switcher = false;
   history.replaceState(null,'','#' + page);
   render();
+  if (page==='calendar' && ui.workspace?.integrations.google?.connected) syncConnectedCalendar(true);
   window.scrollTo(0,0);
 }
 
@@ -163,7 +166,7 @@ function editRecord(key, row, prefills = {}) {
     dialog.close();
     if (key === 'messages') ui.filters.thread = result.contactId;
     render();
-    notify('Saved ' + singular[key] + '.');
+    notify(result.calendarIssue || 'Saved ' + singular[key] + '.',Boolean(result.calendarIssue));
   },{
     description, extra:row ? button('Delete',{glyph:'trash-2',action:'delete:' + key,id:row.id,kind:'danger-outline'}) : ''
   });
@@ -252,9 +255,98 @@ function memberModal(member) {
     {role:member.role},async input => { await save('member',{...input,userId:member.id}); dialog.close(); notify('Team access updated.'); });
 }
 
+function googleSetup() {
+  const callback=location.origin+'/api/google-calendar';
+  modal('Connect your Google Calendar',`<p class="setup-note">Create the Google connection once, then use Connect calendar to approve access.</p>
+    <ol class="setup-instructions">
+      <li>Open <a href="https://console.cloud.google.com/apis/library/calendar-json.googleapis.com" target="_blank" rel="noopener noreferrer">Google Cloud</a>, choose a project, and enable Google Calendar API.</li>
+      <li>In Google Auth Platform, configure your app audience. For a testing app, add the Google account you plan to connect as a test user.</li>
+      <li>Create an OAuth client for a Web application. Add this exact authorized redirect URI<br><code>${h(callback)}</code></li>
+      <li>Add <code>GOOGLE_CLIENT_ID</code> and <code>GOOGLE_CLIENT_SECRET</code> as sensitive Production environment variables in the CRM’s Vercel project, then redeploy.</li>
+    </ol><p class="setup-note">Your calendar connection is encrypted on the server. Google access is approved from your Google account.</p>
+    <div class="action-row">${button('Copy redirect URI',{action:'copy-literal',id:callback,glyph:'copy'})}</div>`);
+}
+
+async function connectGoogle() {
+  if (ui.demo) return notify('Connect Google from your live workspace.');
+  if (!ui.workspace.integrations.google?.configured) return googleSetup();
+  const result=await api('workspaces/'+ui.workspace.id+'/calendar/connect',{});
+  const url=new URL(result.url);
+  if (url.origin!=='https://accounts.google.com') throw new Error('The Google authorization address is invalid.');
+  location.assign(url.href);
+}
+async function googleSettings() {
+  const google=ui.workspace.integrations.google || {};
+  if (!google.connected) return google.configured && !ui.demo
+    ? modal('Google Calendar',example('calendar-days','Connect your calendar','Approve access to create appointments and track Google Calendar changes.',button('Connect calendar',{action:'google-connect',glyph:'link',kind:'primary'})))
+    : googleSetup();
+  const result=await api('workspaces/'+ui.workspace.id+'/calendar/calendars',{});
+  const defs=[{name:'calendarId',label:'Calendar to sync',type:'select',required:true,choices:result.calendars.map(row=>[row.id,row.name+(row.primary ? ' (primary)' : '')])}];
+  formModal('Google Calendar settings',defs,{calendarId:google.calendarId},async input=>{
+    await save('calendar/select',input);dialog.close();await syncConnectedCalendar();
+  },{label:'Save calendar',description:'Google imports the previous 90 days and the next year. CRM changes sync to the selected calendar.',
+    extra:button('Disconnect',{action:'google-disconnect',kind:'danger-outline'})});
+}
+async function syncConnectedCalendar(silent=false) {
+  if (calendarSyncRunning || ui.demo || !ui.workspace?.integrations.google?.connected || !canEdit()) return;
+  if (silent && ui.workspace.integrations.google.lastSync && Date.now()-Date.parse(ui.workspace.integrations.google.lastSync)<300000) return;
+  const workspaceId=ui.workspace.id;
+  calendarSyncRunning=true;
+  if (!silent) notify('Syncing Google Calendar…');
+  try {
+    let result;
+    let batches=0;
+    do {
+      result=await api('workspaces/'+workspaceId+'/calendar/sync',{});
+      batches++;
+    } while ((result.more || result.pending) && batches<50 && ui.workspace.id===workspaceId);
+    if (ui.workspace.id===workspaceId) {await loadWorkspace(workspaceId);render();}
+    if (!silent) notify(result.more || result.pending ? 'Calendar sync has more changes. Sync again to continue.' : 'Google Calendar is up to date.');
+  } catch(error) {
+    if (ui.workspace.id===workspaceId) {await loadWorkspace(workspaceId).catch(()=>{});render();}
+    if (!silent || ui.page==='calendar') notify(error.message,true);
+  } finally {calendarSyncRunning=false;}
+}
+function stripeSetup() {
+  const hook=location.origin+endpoint('webhook/stripe');
+  modal('Connect Stripe reporting',`<ol class="setup-instructions">
+    <li>Add a restricted Stripe key as <code>STRIPE_API_KEY</code> in the CRM’s Vercel project. Allow Checkout creation and read access to charges, refunds, invoices, invoice payments, prices, and subscriptions.</li>
+    <li>Set <code>INTEGRATION_WORKSPACE_ID</code> to <code>${h(ui.workspace.id)}</code>.</li>
+    <li>In Stripe Workbench, add a webhook endpoint using <code>${h(hook)}</code>, then save its signing secret in Vercel as <code>STRIPE_WEBHOOK_SECRET</code>. The repository guide lists the required payment and subscription events.</li>
+    <li>Redeploy, then select Sync Stripe on the Payments page to import existing payments and subscriptions. New billing events update the dashboard automatically.</li>
+  </ol><p class="setup-note">Configure Stripe Tax separately if tax collection applies to your services.</p><div class="action-row">
+    ${button('Copy workspace ID',{action:'copy-literal',id:ui.workspace.id,glyph:'copy'})}
+    ${button('Copy webhook URL',{action:'copy-literal',id:hook,glyph:'copy'})}
+    <a class="text-link" href="https://github.com/mjacobg2002-ant/Kind-Supply-Digital-Organazation-Sheet/blob/main/crm/README.md#stripe" target="_blank" rel="noopener noreferrer">Setup guide</a></div>`);
+}
+async function syncStripeAccount() {
+  if (stripeSyncRunning || ui.demo || !manager() || !ui.workspace.integrations.stripe) return;
+  const workspaceId=ui.workspace.id;
+  stripeSyncRunning=true;
+  notify('Importing Stripe payments and subscriptions…');
+  try {
+    for (const kind of ['invoices','charges','subscriptions']) {
+      let cursor='';
+      let batches=0;
+      do {
+        const result=await api('workspaces/'+workspaceId+'/stripe-sync',{kind,cursor});
+        cursor=result.cursor;
+        batches++;
+      } while (cursor && batches<100);
+      if (cursor) throw new Error('More Stripe history remains. Run sync again to continue.');
+    }
+    if (ui.workspace.id===workspaceId) {await loadWorkspace(workspaceId);render();}
+    notify('Stripe account activity is up to date.');
+  } catch(error) {
+    if (ui.workspace.id===workspaceId) {await loadWorkspace(workspaceId).catch(()=>{});render();}
+    notify(error.message,true);
+  } finally {stripeSyncRunning=false;}
+}
+
 async function handleAction(action, id, element) {
   const [group,key] = action.split(':');
   const area = ui.workspace;
+  if (action === 'copy-literal') return copy(id);
   if (action === 'close') return dialog.close();
   if (!area) return;
   if (group === 'nav') return navigate(key);
@@ -321,7 +413,7 @@ async function handleAction(action, id, element) {
   }
   if (action === 'event') {
     const row = find('events',id);
-    return modal(row.title,`<p>${h(timeLabel(row.startsAt,state().settings.timezone))} to ${h(timeLabel(row.endsAt,state().settings.timezone))}</p><p>${h(row.location)}</p><p>${h(row.notes)}</p>`);
+    return modal(row.title,`<p>${h(timeLabel(row.startsAt,state().settings.timezone))} to ${h(timeLabel(row.endsAt,state().settings.timezone))}</p><p>${h(row.location)}</p><p>${h(row.notes)}</p><div class="detail-actions">${safeLink(row.google?.url,'Open in Google Calendar')}</div>`);
   }
   if (action === 'withdraw-proposal') {
     const row = find('proposals',id);
@@ -358,6 +450,18 @@ async function handleAction(action, id, element) {
       notify(result.status === 'Submitted' ? 'Draft submitted to the provider.' : 'Message status: ' + result.status,result.status !== 'Submitted');
     });
   }
+  if (action==='google-connect') return connectGoogle();
+  if (action==='google-settings') return googleSettings();
+  if (action==='google-sync') return syncConnectedCalendar();
+  if (action==='google-disconnect') return confirmAction('Disconnect Google Calendar?','Existing appointments stay in the CRM. Synchronization stops until you reconnect.','Disconnect',async()=>{
+    await save('calendar/disconnect',{});notify('Google Calendar disconnected.');
+  });
+  if (action==='google-resolve') return confirmAction('Use the Google version?','Replace the CRM appointment details with the current Google Calendar version.','Use Google version',async()=>{
+    await save('calendar/resolve',{id});notify('Appointment conflict resolved.');
+  });
+  if (action==='google-setup') return googleSetup();
+  if (action==='stripe-setup') return stripeSetup();
+  if (action==='stripe-sync') return syncStripeAccount();
   if (action === 'checkout') return checkoutModal(id);
   if (action === 'copy-payment') return copy(find('payments',id)?.checkoutUrl);
   if (action === 'stages') return stagesModal();
@@ -426,6 +530,12 @@ async function startWorkspace() {
   await loadWorkspace(first.id);
   ui.page = Object.hasOwn(pages,location.hash.slice(1)) ? location.hash.slice(1) : 'dashboard';
   render();
+  if (publicParams.has('google')) {
+    const status=publicParams.get('google');
+    history.replaceState(null,'','#settings');
+    if (status==='connected') {notify('Google Calendar connected. Choose the calendar to sync.');await googleSettings();}
+    else notify(status==='denied' ? 'Google Calendar connection was canceled.' : 'Google Calendar could not connect. Start again from Settings.',true);
+  } else if (ui.page==='calendar') syncConnectedCalendar(true);
 }
 
 document.addEventListener('click',event => {
@@ -527,4 +637,10 @@ async function start() {
     else throw error;
   }
 }
+setInterval(()=>{
+  if (document.visibilityState==='visible' && ui.workspace) syncConnectedCalendar(true);
+},300000);
+document.addEventListener('visibilitychange',()=>{
+  if (document.visibilityState==='visible' && ui.workspace) syncConnectedCalendar(true);
+});
 start().catch(error => authLayout('CRM unavailable',error.message,''));

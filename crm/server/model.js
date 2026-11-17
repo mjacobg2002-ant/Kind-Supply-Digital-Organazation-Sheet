@@ -261,6 +261,7 @@ export async function upsert(state, tx, workspaceId, key, input, user) {
     }
     reject(409, 'Published terms are fixed. Start a new proposal for revised terms.');
   }
+  if (key==='events' && prior?.allDay) reject(409,'Edit all-day Google appointments from Google Calendar.');
   const valid = fields(state, key, input);
   if (key === 'contacts' && duplicateContact(state, valid, prior?.id)) reject(409, 'A contact with this practice and contact detail already exists.');
   if (key === 'contacts' && (state.smsOptOuts ?? []).includes(valid.phone) && valid.smsAllowed) reject(409, 'This number opted out. It must text START before SMS can be enabled.');
@@ -297,6 +298,7 @@ export function remove(state, key, id, version, user) {
   if (!collections.includes(key)) reject(404, 'Unknown record type.');
   const item = getRecord(state, key, id);
   if (item.version !== version) reject(409, 'This record changed. Refresh and try again.');
+  if (key==='events' && item.google) reject(409,'Cancel this linked appointment and save it to sync the cancellation to Google.');
   if (key === 'contacts' && ['deals','tasks','events','messages','proposals'].some(collection => state[collection].some(row => row.contactId === id))) {
     reject(409, 'This contact has linked records. Resolve them before deleting the contact.');
   }

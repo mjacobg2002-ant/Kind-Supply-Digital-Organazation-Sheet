@@ -1,12 +1,14 @@
 import Stripe from 'stripe';
 import { randomBytes } from 'node:crypto';
 import { audit, getRecord, newRecord, runWorkflows, updateState } from './model.js';
+import { applyStripeResourceEvent, importStripePage } from './stripe-data.js';
 import { baseUrl, reject } from './security.js';
 
 const eventTypes = new Set([
   'checkout.session.completed','checkout.session.expired','checkout.session.async_payment_succeeded','checkout.session.async_payment_failed',
   'customer.subscription.created','customer.subscription.updated','customer.subscription.deleted',
-  'invoice.paid','invoice.payment_failed','charge.refunded','charge.dispute.created','radar.early_fraud_warning.created'
+  'invoice.paid','invoice.payment_failed','charge.refunded','charge.dispute.created','radar.early_fraud_warning.created',
+  'charge.succeeded','charge.failed','payment_intent.payment_failed','invoice.finalized','invoice.updated','invoice.voided','invoice.marked_uncollectible'
 ]);
 const billingRoles = ['owner','admin'];
 const resourceId = value => typeof value === 'string' ? value : value?.id;
@@ -102,21 +104,9 @@ export async function checkout(db, workspace, user, input, req) {
   }
 }
 
-async function riskMetadata(stripe, type, object) {
-  const charge = type === 'charge.refunded' ? object : await stripe.charges.retrieve(resourceId(object.charge));
-  const intent = resourceId(charge.payment_intent);
-  if (!intent) return {};
-  const payment = await stripe.paymentIntents.retrieve(intent);
-  if (payment.metadata?.app === marker) return { metadata: payment.metadata, charge, intent };
-  const invoices = await stripe.invoicePayments.list({ payment: { type: 'payment_intent', payment_intent: intent }, limit: 10 });
-  for (const payment of invoices.data) {
-    const invoice = await stripe.invoices.retrieve(resourceId(payment.invoice));
-    const subscription = resourceId(invoice.parent?.subscription_details?.subscription ?? invoice.subscription);
-    if (!subscription) continue;
-    const sub = await stripe.subscriptions.retrieve(subscription);
-    if (sub.metadata?.app === marker) return { metadata: sub.metadata, charge, intent, invoice, subscription };
-  }
-  return {};
+export async function syncStripe(db,workspace,user,input) {
+  if (!billingEnabled()) reject(503,'Configure Stripe and its webhook first.');
+  return importStripePage(db,workspace,user,input,client());
 }
 
 export async function stripeWebhook(db, raw, signature) {
@@ -133,27 +123,15 @@ export async function stripeWebhook(db, raw, signature) {
   if (!eventTypes.has(type)) return { received: true };
   const seen = await db.query("SELECT 1 FROM crm_provider_events WHERE provider='stripe' AND id=$1", [event.id]);
   if (seen.rows.length) return { received: true };
-  let object = event.data.object;
-  let metadata = object.metadata;
-  let subscription = '';
-  let risk;
-  if (type.startsWith('customer.subscription.')) {
-    subscription = object.id;
-    object = await stripe.subscriptions.retrieve(subscription);
-    metadata = object.metadata;
+  const object = event.data.object;
+  const metadata = object.metadata;
+  const workspace = process.env.INTEGRATION_WORKSPACE_ID;
+  if (!workspace) return { received:true };
+  if (!type.startsWith('checkout.')) {
+    await applyStripeResourceEvent(db,workspace,event,stripe);
+    return { received:true };
   }
-  if (type.startsWith('invoice.')) {
-    subscription = resourceId(object.parent?.subscription_details?.subscription ?? object.subscription);
-    if (!subscription) return { received: true };
-    metadata = (await stripe.subscriptions.retrieve(subscription)).metadata;
-    object = await stripe.invoices.retrieve(object.id);
-  }
-  if (type.startsWith('charge.') || type.startsWith('radar.')) {
-    risk = await riskMetadata(stripe, type, object);
-    metadata = risk.metadata;
-    subscription = risk.subscription;
-  }
-  if (metadata?.app !== marker || metadata.workspace !== process.env.INTEGRATION_WORKSPACE_ID || !metadata.payment) return { received: true };
+  if (metadata?.app !== marker || metadata.workspace !== workspace || !metadata.payment) return { received:true };
   await updateState(db, metadata.workspace, async (state, tx) => {
     const received = await tx.query("INSERT INTO crm_provider_events(provider,id) VALUES ('stripe',$1) ON CONFLICT DO NOTHING RETURNING id", [event.id]);
     if (!received.rows.length) return;
@@ -177,52 +155,6 @@ export async function stripeWebhook(db, raw, signature) {
         else if (type.endsWith('expired')) order.status = 'Expired';
         else if (!['Failed','Expired'].includes(order.status)) order.status = 'Pending';
       }
-    }
-    if (type.startsWith('customer.subscription.')) {
-      order.subscriptionId = subscription;
-      const previous = state.subscriptions.find(row => row.id === subscription);
-      const row = { id: subscription, dealId: order.dealId, contactId: order.contactId, title: order.title, status: object.status, amount: order.amount, cancelAtPeriodEnd: object.cancel_at_period_end };
-      const previousStatus = previous?.status;
-      if (previous) Object.assign(previous, row);
-      else state.subscriptions.unshift(row);
-      if (previousStatus !== object.status || type.endsWith('deleted')) audit(state, 'Stripe subscription: ' + object.status + ' · ' + order.title, 'Stripe', order);
-    }
-    if (type.startsWith('invoice.')) {
-      const invoice = state.payments.find(row => row.invoiceId === object.id);
-      const paid = object.status === 'paid';
-      const row = {
-        invoiceId: object.id, dealId: order.dealId, contactId: order.contactId, title: order.title,
-        amount: object.amount_due, collectedAmount: object.amount_paid, currency: object.currency, mode: 'invoice',
-        status: paid ? 'Paid' : 'Payment failed', invoiceUrl: object.hosted_invoice_url,
-        paidAt: object.status_transitions?.paid_at ? new Date(object.status_transitions.paid_at * 1000).toISOString() : null
-      };
-      const firstPayment = paid && invoice?.status !== 'Paid' && !invoice?.refunded;
-      if (invoice && !invoice.refunded) Object.assign(invoice, row);
-      if (!invoice) state.payments.unshift(newRecord(row));
-      audit(state, (paid ? 'Stripe invoice paid: ' : 'Stripe invoice payment failed: ') + order.title, 'Stripe', order);
-      if (firstPayment) runWorkflows(state, 'Payment received', order);
-    }
-    if (risk) {
-      let payment = risk.invoice ? state.payments.find(row => row.invoiceId === risk.invoice.id) : order;
-      if (!payment && risk.invoice) {
-        const invoice = risk.invoice;
-        payment = newRecord({
-          invoiceId:invoice.id, dealId:order.dealId, contactId:order.contactId, title:order.title,
-          amount:invoice.amount_due, collectedAmount:invoice.amount_paid, currency:invoice.currency,
-          mode:'invoice', status:invoice.status === 'paid' ? 'Paid' : 'Payment failed', invoiceUrl:invoice.hosted_invoice_url,
-          paidAt:invoice.status_transitions?.paid_at ? new Date(invoice.status_transitions.paid_at * 1000).toISOString() : null
-        });
-        state.payments.unshift(payment);
-      }
-      if (!payment) return;
-      if (type === 'charge.refunded') {
-        if (!payment.collectedAmount) payment.collectedAmount = risk.charge.amount_captured ?? risk.charge.amount ?? 0;
-        payment.refunded = Math.max(payment.refunded ?? 0, risk.charge.amount_refunded ?? 0);
-        payment.status = risk.charge.refunded ? 'Refunded' : 'Partially refunded';
-      } else {
-        payment.risk = type === 'charge.dispute.created' ? 'Dispute opened' : 'Fraud warning';
-      }
-      audit(state, `Stripe ${payment.risk && type !== 'charge.refunded' ? payment.risk.toLowerCase() : payment.status.toLowerCase()}: ${order.title}`, 'Stripe', order);
     }
   });
   return { received: true };

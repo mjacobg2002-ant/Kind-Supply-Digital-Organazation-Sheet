@@ -341,3 +341,18 @@ td .button { min-height: 30px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
 }
+
+.finance-metrics { margin-bottom: 0; }
+#page-view > .finance-metrics { margin-bottom: 17px; }
+.billing-toolbar p { color: var(--muted); font-size: 11px; margin-top: 5px; line-height: 1.5; }
+.collection-bars { height: 205px; display: flex; gap: 12px; padding: 10px 20px 16px; align-items: stretch; }
+.collection-column { flex: 1; display: flex; flex-direction: column; align-items: center; min-width: 0; gap: 8px; color: var(--muted); font-size: 11px; }
+.collection-column > strong { font-size: 10px; font-weight: 700; }
+.collection-track { flex: 1; width: 70%; display: flex; align-items: flex-end; border-radius: 6px; background: #f0effa; }
+.collection-track span { background: #6958de; width: 100%; border-radius: 6px; min-height: 2px; }
+.calendar-connection { background: white; color: var(--ink); border-color: var(--line); }
+.calendar-connection > div > span { color: var(--muted); max-width: 600px; line-height: 1.5; }
+.setup-instructions { padding-left: 18px; font-size: 13px; line-height: 1.6; color: var(--muted); }
+.setup-instructions li { margin-bottom: 9px; }
+.setup-instructions code { overflow-wrap: anywhere; font-size: 11px; }
+.setup-note { color: var(--muted); font-size: 12px; line-height: 1.6; margin: 10px 0; }
