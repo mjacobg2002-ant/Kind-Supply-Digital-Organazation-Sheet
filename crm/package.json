@@ -11,7 +11,8 @@
     "build": "vite build",
     "preview": "node --env-file-if-exists=.env server/local.js",
     "setup": "node --env-file-if-exists=.env server/setup.js",
-    "test": "node --test"
+    "test": "node --test",
+    "prebuild": "node --env-file-if-exists=.env server/setup.js --if-configured"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.2.8",

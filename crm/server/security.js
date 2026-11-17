@@ -24,8 +24,8 @@ async function passwordHash(password, salt = secret()) {
 }
 
 export async function encodePassword(password) {
-  if (typeof password !== 'string' || password.length < 14 || password.length > 256) {
-    reject(400, 'Use a password between 14 and 256 characters.');
+  if (typeof password !== 'string' || password.length < 8 || password.length > 256) {
+    reject(400, 'Use a password between 8 and 256 characters.');
   }
   return passwordHash(password);
 }

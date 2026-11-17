@@ -26,7 +26,7 @@ test('CRM HTTP lifecycle with transactional PostgreSQL and signed provider callb
   const db = new PGlite();
   await migrate(db);
   await migrate(db);
-  const password = 'test-password-at-least-14';
+  const password = 'Test!123';
   const workspace = await bootstrap(db,{ email:'owner@example.com',password,name:'Owner',workspace:'Agency' });
   const server = createServer(createHandler({db}));
   server.listen(0,'127.0.0.1');
